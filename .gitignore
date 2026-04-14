@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.parquet
+*.zarr.zip
+*.csv.gz
+*.geojson
+*.tif
+*.tiff
+*.json
+!requirements.txt
+.DS_Store
