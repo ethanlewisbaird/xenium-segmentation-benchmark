@@ -1,0 +1,63 @@
+# BIDCell configuration template for Xenium data
+# Copy this file, fill in the paths, and pass with --config to run_bidcell.py
+# NOTE: Commented options default to None
+
+cpus: 4 # number of CPUs for multiprocessing
+
+files: # NOTE: please ensure these point to the right locations
+  data_dir: /path/to/outs_subset            # data directory (output from xenium-subsetter)
+  fp_dapi: /path/to/outs_subset/morphology_focus/ch0000_dapi.ome.tif
+  fp_transcripts: /path/to/outs_subset/transcripts.csv.gz
+  fp_ref:         # path to reference CSV, or leave blank if no reference data
+  fp_pos_markers: # path to positive markers CSV, or leave blank
+  fp_neg_markers: # path to negative markers CSV, or leave blank
+
+nuclei_fovs:
+  stitch_nuclei_fovs: False # set True to stitch separate FOVs of DAPI together in 1 image
+
+nuclei:
+  diameter: # estimated diameter of nuclei for Cellpose - or None to auto-compute
+
+transcripts:
+  shift_to_origin: False
+  x_col: x_location
+  y_col: y_location
+  gene_col: feature_name
+  transcripts_to_filter: # genes starting with these strings will be filtered out
+  - NegControlProbe_
+  - antisense_
+  - NegControlCodeword_
+  - BLANK_
+  - Blank-
+  - NegPrb
+
+affine:
+  target_pix_um: 1.0   # microns per pixel for segmentation
+  base_pix_x: 0.2125   # Xenium pixel size (µm) — do not change for Xenium data
+  base_pix_y: 0.2125
+  base_ts_x: 1.0
+  base_ts_y: 1.0
+  global_shift_x: 0
+  global_shift_y: 0
+
+model_params:
+  name: custom
+  patch_size: 48
+  elongated: []
+
+training_params:
+  total_epochs: 1
+  total_steps: 4000
+  ne_weight: 1.0   # nuclei encapsulation loss
+  os_weight: 1.0   # oversegmentation loss
+  cc_weight: 0.0   # cell-calling loss; set 0 if no reference cell types
+  ov_weight: 1.0
+  pos_weight: 0.0  # positive marker loss; set 0 if no reference markers
+  neg_weight: 0.0  # negative marker loss; set 0 if no reference markers
+
+testing_params:
+  test_epoch: 1
+  test_step: 4000
+
+experiment_dirs:
+  dir_id: last # use latest output dir

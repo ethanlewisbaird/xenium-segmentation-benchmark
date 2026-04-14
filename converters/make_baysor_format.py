@@ -1,74 +1,63 @@
 """
-Convert Segger output → Baysor-format CSV + GeoJSON for xeniumranger import-segmentation.
+Convert Segger transcript parquet → Baysor-format CSV for xeniumranger.
 
 xeniumranger --transcript-assignment expects:
   transcript_id (uint64), cell (str like "seg-N" or "" unassigned), is_noise (bool)
 
-xeniumranger --viz-polygons expects a GeoJSON FeatureCollection where each Feature
-  "id" matches the "cell" string in the CSV.
+Usage:
+  python make_baysor_format.py \
+      --segger-parquet segger_output/.../segger_transcripts.parquet \
+      --output-csv     segger_transcript_assignment.csv \
+      [--min-tx 5]
 """
 
-import json
+import argparse
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from tqdm import tqdm
 
-TX_PATH    = Path("segger_output/segger_dec25_0.5_False_4_12.0_5_5.0_20260403/segger_transcripts.parquet")
-BOUNDS_PATH = Path("outs_subset/segger_segmentation/cell_boundaries.parquet")
-OUT_CSV    = Path("segger_transcript_assignment.csv")
-OUT_GJ     = Path("segger_viz_polygons.geojson")
 
-MIN_TX = 5
+def make_baysor_csv(parquet_path: Path, output_csv: Path, min_tx: int = 5) -> None:
+    print("Loading transcripts...")
+    df = pd.read_parquet(parquet_path, columns=["transcript_id", "segger_cell_id"])
+    print(f"  {len(df):,} rows")
 
-# ── Load transcripts ───────────────────────────────────────────────────────────
-print("Loading transcripts...")
-df = pd.read_parquet(TX_PATH, columns=["transcript_id", "segger_cell_id"])
-print(f"  {len(df):,} rows")
+    counts = df.groupby("segger_cell_id").size()
+    assigned_mask = df["segger_cell_id"] != "UNASSIGNED"
+    keep_cells = counts[(counts >= min_tx) & (counts.index != "UNASSIGNED")].index
+    print(f"  Cells with >= {min_tx} transcripts: {len(keep_cells):,}")
 
-# ── Build cell ID mapping: segger_id → "seg-N" ────────────────────────────────
-counts = df.groupby("segger_cell_id").size()
-assigned_mask = df["segger_cell_id"] != "UNASSIGNED"
-keep_cells = counts[(counts >= MIN_TX) & (counts.index != "UNASSIGNED")].index
+    # Sequential integer IDs 1..N
+    cell_map = {cid: f"seg-{i + 1}" for i, cid in enumerate(keep_cells)}
 
-print(f"  Cells with ≥{MIN_TX} transcripts: {len(keep_cells):,}")
+    print("Building transcript assignment CSV...")
+    df["cell"] = df["segger_cell_id"].map(cell_map).fillna("")
+    df["is_noise"] = (~assigned_mask | ~df["segger_cell_id"].isin(keep_cells)).astype(int)
+    df["transcript_id"] = df["transcript_id"].astype(np.int64)
 
-# Sequential integer IDs 1..N
-cell_map = {cid: f"seg-{i+1}" for i, cid in enumerate(keep_cells)}
+    out = df[["transcript_id", "cell", "is_noise"]]
+    out.to_csv(output_csv, index=False)
+    print(f"Wrote {output_csv}  ({len(out):,} rows, {output_csv.stat().st_size / 1e9:.2f} GB)")
 
-# ── Write transcript assignment CSV ───────────────────────────────────────────
-print("Building transcript assignment CSV...")
-df["cell"] = df["segger_cell_id"].map(cell_map).fillna("")
-df["is_noise"] = (~assigned_mask | ~df["segger_cell_id"].isin(keep_cells)).astype(int)
-df["transcript_id"] = df["transcript_id"].astype(np.int64)
 
-out = df[["transcript_id", "cell", "is_noise"]]
-out.to_csv(OUT_CSV, index=False)
-print(f"  Wrote {OUT_CSV}  ({len(out):,} rows, {OUT_CSV.stat().st_size/1e9:.2f} GB)")
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[1].strip())
+    parser.add_argument(
+        "--segger-parquet", required=True,
+        help="Path to segger_transcripts.parquet",
+    )
+    parser.add_argument(
+        "--output-csv", required=True,
+        help="Output CSV path for xeniumranger --transcript-assignment",
+    )
+    parser.add_argument(
+        "--min-tx", type=int, default=5,
+        help="Minimum transcripts per cell to include (default: 5)",
+    )
+    args = parser.parse_args()
+    make_baysor_csv(Path(args.segger_parquet), Path(args.output_csv), args.min_tx)
 
-# ── Write viz polygons GeoJSON using new IDs ──────────────────────────────────
-print("Building viz polygons GeoJSON...")
-bounds = pd.read_parquet(BOUNDS_PATH)
 
-features = []
-for orig_id, new_id in tqdm(cell_map.items(), total=len(cell_map)):
-    grp = bounds[bounds["cell_id"] == orig_id]
-    if len(grp) == 0:
-        continue
-    vx = grp["vertex_x"].values.tolist()
-    vy = grp["vertex_y"].values.tolist()
-    coords = [[float(x), float(y)] for x, y in zip(vx, vy)]
-    if coords[0] != coords[-1]:
-        coords.append(coords[0])
-    features.append({
-        "type": "Feature",
-        "id": new_id,
-        "geometry": {"type": "Polygon", "coordinates": [coords]},
-        "properties": {"cell_id": new_id}
-    })
-
-geojson = {"type": "FeatureCollection", "features": features}
-with open(OUT_GJ, "w") as f:
-    json.dump(geojson, f)
-print(f"  Wrote {OUT_GJ}  ({len(features):,} features, {OUT_GJ.stat().st_size/1e6:.1f} MB)")
-print("Done.")
+if __name__ == "__main__":
+    main()

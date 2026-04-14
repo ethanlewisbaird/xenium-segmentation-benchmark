@@ -1,4 +1,4 @@
-# xenium-benchmark
+# xenium-segmentation-benchmark
 
 A benchmarking framework for cell segmentation methods on 10x Genomics Xenium spatial transcriptomics data.
 
@@ -47,23 +47,31 @@ benchmark_bundle/               single download, all methods
 
 ## Installation
 
+```bash
+git clone https://github.com/<your-username>/xenium-segmentation-benchmark
+cd xenium-segmentation-benchmark
+```
+
 ### Prerequisites
 
 - [xeniumranger](https://www.10xgenomics.com/support/software/xenium-ranger) (≥ 4.0) installed and on `$PATH`
-- Conda environments for each method (see their respective repos)
 
-### Method-specific setup
+### Segger environment
 
-**Segger:**
+Segger source is included in `segger_dev/`. Install it with its dependencies:
+
 ```bash
 conda create -n segger311 python=3.11
+conda activate segger311
 pip install torch torchvision torch_geometric
-cd methods/segger && pip install -e path/to/segger_dev
+pip install -e segger_dev/
 ```
 
-**BIDCell:**
+### BIDCell environment
+
 ```bash
 conda create -n bidcell python=3.10
+conda activate bidcell
 pip install bidcell
 ```
 
@@ -78,18 +86,26 @@ Use [xenium-subsetter](../xenium-subsetter) to create `outs_subset/`.
 ```bash
 # Train (or use pre-trained tiles)
 conda run -n segger311 python methods/segger/run_predict.py \
-    --dataset-dir /path/to/processed_tiles \
+    --dataset-dir /path/to/segger_tiles \
     --output-dir  /path/to/segger_output \
-    --checkpoint  /path/to/segger.ckpt
+    --checkpoint  /path/to/segger_model/lightning_logs/version_N \
+    --transcripts outs_subset/transcripts.parquet
 
-# Convert output to xeniumranger format
+# Convert output to Xenium coordinates
+conda run -n segger311 python methods/segger/to_xenium.py \
+    --segger-parquet segger_output/.../segger_transcripts.parquet \
+    --offsets        outs_subset/subset_offsets.json \
+    --output-dir     outs_subset/segger_segmentation
+
+# Convert to xeniumranger format
 conda run -n segger311 python converters/make_baysor_format.py \
     --segger-parquet segger_output/.../segger_transcripts.parquet \
     --output-csv     segger_transcript_assignment.csv
 
 conda run -n segger311 python converters/make_viz_polygons.py \
-    --boundaries outs_subset/segger_segmentation/cell_boundaries.parquet \
-    --output     segger_viz_polygons.geojson
+    --boundaries     outs_subset/segger_segmentation/cell_boundaries.parquet \
+    --segger-parquet segger_output/.../segger_transcripts.parquet \
+    --output         segger_viz_polygons.geojson
 ```
 
 ### 3. Run BIDCell
@@ -98,7 +114,11 @@ conda run -n segger311 python converters/make_viz_polygons.py \
 conda run -n bidcell bidcell \
     --config Dec25_config.yaml
 
-conda run -n bidcell python methods/bidcell/to_xenium.py
+conda run -n bidcell python methods/bidcell/to_xenium.py \
+    --mask        outs_subset/model_outputs/.../epoch_N_step_M.tif \
+    --transcripts outs_subset/transcripts.parquet \
+    --offsets     outs_subset/subset_offsets.json \
+    --output-dir  outs_subset/bidcell_segmentation
 conda run -n bidcell python converters/make_geojson.py \
     --boundaries outs_subset/bidcell_segmentation/cell_boundaries.parquet \
     --output     bidcell_cells.geojson

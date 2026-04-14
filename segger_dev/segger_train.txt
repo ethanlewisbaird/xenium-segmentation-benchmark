@@ -1,0 +1,16 @@
+python .scripts/train_model.py \
+  --train_dir /data-hdd0/Ethan_Baird/Dec25_xenium/processed_tiles/train_tiles \
+  --val_dir /data-hdd0/Ethan_Baird/Dec25_xenium/processed_tiles/val_tiles \
+  --batch_size_train 4 \
+  --batch_size_val 4 \
+  --init_emb 8 \
+  --hidden_channels 64 \
+  --out_channels 16 \
+  --heads 4 \
+  --aggr sum \
+  --accelerator cuda \
+  --strategy auto \
+  --precision 16-mixed \
+  --devices 1 \
+  --epochs 100 \
+  --default_root_dir ./models/clean2

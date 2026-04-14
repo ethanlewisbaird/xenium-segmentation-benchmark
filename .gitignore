@@ -13,4 +13,12 @@ build/
 *.tiff
 *.json
 !requirements.txt
+!methods/bidcell/config_template.yaml
 .DS_Store
+
+# Segger vendored source — keep source, ignore build artifacts
+segger_dev/*.egg-info/
+segger_dev/build/
+segger_dev/dist/
+segger_dev/**/__pycache__/
+segger_dev/**/*.pyc
