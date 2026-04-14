@@ -84,20 +84,31 @@ Use [xenium-subsetter](../xenium-subsetter) to create `outs_subset/`.
 ### 2. Run Segger
 
 ```bash
-# Train (or use pre-trained tiles)
+# Step 1 — Build graph tiles from transcripts + boundaries
+conda run -n segger311 python methods/segger/create_dataset.py \
+    --xenium-dir outs_subset/ \
+    --output-dir segger_tiles/
+
+# Step 2 — Train the GNN
+conda run -n segger311 python methods/segger/train.py \
+    --tiles-dir  segger_tiles/ \
+    --output-dir segger_model/ \
+    --epochs 100 --devices 1
+
+# Step 3 — Run inference
 conda run -n segger311 python methods/segger/run_predict.py \
-    --dataset-dir /path/to/segger_tiles \
-    --output-dir  /path/to/segger_output \
-    --checkpoint  /path/to/segger_model/lightning_logs/version_N \
+    --dataset-dir segger_tiles/ \
+    --output-dir  segger_output/ \
+    --checkpoint  segger_model/lightning_logs/version_0 \
     --transcripts outs_subset/transcripts.parquet
 
-# Convert output to Xenium coordinates
+# Step 4 — Convert to Xenium coordinates
 conda run -n segger311 python methods/segger/to_xenium.py \
     --segger-parquet segger_output/.../segger_transcripts.parquet \
     --offsets        outs_subset/subset_offsets.json \
     --output-dir     outs_subset/segger_segmentation
 
-# Convert to xeniumranger format
+# Step 5 — Convert to xeniumranger format
 conda run -n segger311 python converters/make_baysor_format.py \
     --segger-parquet segger_output/.../segger_transcripts.parquet \
     --output-csv     segger_transcript_assignment.csv
@@ -110,15 +121,31 @@ conda run -n segger311 python converters/make_viz_polygons.py \
 
 ### 3. Run BIDCell
 
-```bash
-conda run -n bidcell bidcell \
-    --config Dec25_config.yaml
+Copy `methods/bidcell/config_template.yaml` and fill in your paths:
 
+```bash
+cp methods/bidcell/config_template.yaml my_bidcell_config.yaml
+# edit my_bidcell_config.yaml: set data_dir, fp_dapi, fp_transcripts
+```
+
+Run the full pipeline (preprocess → train → predict):
+
+```bash
+# Runs nuclei segmentation, expression maps, patches, cell-gene matrix,
+# preannotation, training, and prediction in one command.
+# If fp_ref is not set in the config, preannotation is skipped and
+# all nuclei are assigned type 0 (Unknown).
+conda run -n bidcell python methods/bidcell/run_bidcell.py \
+    --config my_bidcell_config.yaml
+
+# Convert mask to Xenium coordinates
 conda run -n bidcell python methods/bidcell/to_xenium.py \
     --mask        outs_subset/model_outputs/.../epoch_N_step_M.tif \
     --transcripts outs_subset/transcripts.parquet \
     --offsets     outs_subset/subset_offsets.json \
     --output-dir  outs_subset/bidcell_segmentation
+
+# Convert to GeoJSON for xeniumranger
 conda run -n bidcell python converters/make_geojson.py \
     --boundaries outs_subset/bidcell_segmentation/cell_boundaries.parquet \
     --output     bidcell_cells.geojson
