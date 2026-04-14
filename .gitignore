@@ -22,3 +22,4 @@ segger_dev/build/
 segger_dev/dist/
 segger_dev/**/__pycache__/
 segger_dev/**/*.pyc
+segger_dev/docs/_build/
