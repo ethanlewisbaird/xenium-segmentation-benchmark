@@ -118,7 +118,7 @@ def run_bidcell(config_path: str) -> None:
             model.segment_nuclei()
             model.generate_expression_maps()
             model.generate_patches()
-            model.make_cell_gene_mat()
+            model.make_cell_gene_mat(is_cell=False)
 
             print("\n### Preannotation (dummy — no reference) ###")
             make_dummy_preannotation(model)
