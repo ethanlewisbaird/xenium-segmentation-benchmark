@@ -15,7 +15,50 @@ Usage:
 
 import argparse
 import os
+import tempfile
 from pathlib import Path
+
+import yaml
+
+
+def _patch_config_for_no_reference(config_path: str) -> tuple[str, bool]:
+    """
+    Load the YAML config and check whether fp_ref is set.
+
+    If fp_ref is absent or null, create three empty placeholder CSV files in
+    a temporary directory and inject their paths into a copy of the config.
+    Returns (path_to_use, has_reference).  When has_reference is False the
+    returned path points to a NamedTemporaryFile that the caller owns.
+    """
+    with open(config_path) as fh:
+        cfg = yaml.safe_load(fh)
+
+    files = cfg.get("files", {})
+    fp_ref = files.get("fp_ref") or None
+    has_reference = bool(fp_ref)
+
+    if has_reference:
+        return config_path, True
+
+    # BIDCell's Pydantic model requires fp_ref / fp_pos_markers / fp_neg_markers
+    # to be non-null strings that point to existing files — even when the
+    # reference-based losses are set to 0 and preannotate() is never called.
+    # Create empty placeholder files so Pydantic validation passes.
+    placeholder_dir = Path(tempfile.mkdtemp(prefix="bidcell_placeholders_"))
+    for key in ("fp_ref", "fp_pos_markers", "fp_neg_markers"):
+        p = placeholder_dir / f"{key}_placeholder.csv"
+        p.touch()
+        files[key] = str(p)
+
+    cfg["files"] = files
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False, prefix="bidcell_cfg_"
+    )
+    yaml.dump(cfg, tmp)
+    tmp.flush()
+    tmp.close()
+    return tmp.name, False
 
 
 def make_dummy_preannotation(model) -> None:
@@ -59,33 +102,37 @@ def make_dummy_preannotation(model) -> None:
 
 
 def run_bidcell(config_path: str) -> None:
-    from bidcell import BIDCellModel
+    config_to_use, has_reference = _patch_config_for_no_reference(config_path)
 
-    model = BIDCellModel(config_path)
-    config = model.config
-    has_reference = bool(getattr(config.files, "fp_ref", None))
+    try:
+        from bidcell import BIDCellModel
 
-    if has_reference:
-        print("Reference data found — running full pipeline with preannotation.")
-        model.run_pipeline()
-    else:
-        print("No reference data — running pipeline with dummy preannotation.")
-        print("\n### Preprocessing ###")
-        model.segment_nuclei()
-        model.generate_expression_maps()
-        model.generate_patches()
-        model.make_cell_gene_mat()
+        model = BIDCellModel(config_to_use)
 
-        print("\n### Preannotation (dummy — no reference) ###")
-        make_dummy_preannotation(model)
+        if has_reference:
+            print("Reference data found — running full pipeline with preannotation.")
+            model.run_pipeline()
+        else:
+            print("No reference data — running pipeline with dummy preannotation.")
+            print("\n### Preprocessing ###")
+            model.segment_nuclei()
+            model.generate_expression_maps()
+            model.generate_patches()
+            model.make_cell_gene_mat()
 
-        print("\n### Training ###")
-        model.train()
+            print("\n### Preannotation (dummy — no reference) ###")
+            make_dummy_preannotation(model)
 
-        print("\n### Predict ###")
-        model.predict()
+            print("\n### Training ###")
+            model.train()
 
-        print("\n### Done ###")
+            print("\n### Predict ###")
+            model.predict()
+
+            print("\n### Done ###")
+    finally:
+        if config_to_use != config_path:
+            os.unlink(config_to_use)
 
 
 def main() -> None:
