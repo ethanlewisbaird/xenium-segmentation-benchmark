@@ -18,17 +18,23 @@ import os
 import tempfile
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import yaml
 
 
-def _patch_config_for_no_reference(config_path: str) -> tuple[str, bool]:
+def _patch_config_for_no_reference(config_path: str) -> tuple[str, bool, dict]:
     """
     Load the YAML config and check whether fp_ref is set.
 
-    If fp_ref is absent or null, create three empty placeholder CSV files in
-    a temporary directory and inject their paths into a copy of the config.
-    Returns (path_to_use, has_reference).  When has_reference is False the
-    returned path points to a NamedTemporaryFile that the caller owns.
+    If fp_ref is absent or null, create three empty placeholder CSV files so
+    BIDCell's Pydantic validation passes (it requires these fields to be
+    existing file paths even when reference losses are set to 0).
+
+    Returns (patched_config_path, has_reference, placeholder_paths).
+    When has_reference is False, placeholder_paths is a dict with keys
+    "fp_ref", "fp_pos_markers", "fp_neg_markers" pointing to the placeholder
+    files that will be populated after generate_expression_maps() runs.
     """
     with open(config_path) as fh:
         cfg = yaml.safe_load(fh)
@@ -38,17 +44,15 @@ def _patch_config_for_no_reference(config_path: str) -> tuple[str, bool]:
     has_reference = bool(fp_ref)
 
     if has_reference:
-        return config_path, True
+        return config_path, True, {}
 
-    # BIDCell's Pydantic model requires fp_ref / fp_pos_markers / fp_neg_markers
-    # to be non-null strings that point to existing files — even when the
-    # reference-based losses are set to 0 and preannotate() is never called.
-    # Create empty placeholder files so Pydantic validation passes.
     placeholder_dir = Path(tempfile.mkdtemp(prefix="bidcell_placeholders_"))
+    placeholder_paths = {}
     for key in ("fp_ref", "fp_pos_markers", "fp_neg_markers"):
         p = placeholder_dir / f"{key}_placeholder.csv"
         p.touch()
         files[key] = str(p)
+        placeholder_paths[key] = str(p)
 
     cfg["files"] = files
 
@@ -58,7 +62,47 @@ def _patch_config_for_no_reference(config_path: str) -> tuple[str, bool]:
     yaml.dump(cfg, tmp)
     tmp.flush()
     tmp.close()
-    return tmp.name, False
+    return tmp.name, False, placeholder_paths
+
+
+def _write_dummy_reference_csvs(placeholder_paths: dict, data_dir: str) -> None:
+    """
+    Populate the dummy reference CSVs using gene names from all_gene_names.txt.
+
+    BIDCell's training code reads fp_ref to determine n_genes (number of input
+    channels) and cell-type names, and reads fp_pos_markers / fp_neg_markers
+    to look up marker weights per cell type.  When running without a real
+    reference all cells are type 0 ("Unknown") and all marker weights are 0,
+    so we create minimal CSVs that satisfy the expected structure.
+    """
+    gene_names_file = os.path.join(data_dir, "all_gene_names.txt")
+    if not os.path.exists(gene_names_file):
+        raise FileNotFoundError(
+            f"all_gene_names.txt not found at {gene_names_file}. "
+            "generate_expression_maps() must run before training."
+        )
+
+    with open(gene_names_file) as fh:
+        gene_names = [line.strip() for line in fh if line.strip()]
+
+    print(f"  Creating dummy reference CSVs for {len(gene_names)} genes...")
+
+    # fp_ref: one row for "Unknown" (type index 0), gene columns all 0
+    # Required columns (besides genes): ct_idx, cell_type, atlas
+    ref_data = {g: [0.0] for g in gene_names}
+    ref_data["ct_idx"] = [0]
+    ref_data["cell_type"] = ["Unknown"]
+    ref_data["atlas"] = ["dummy"]
+    df_ref = pd.DataFrame(ref_data, index=["Unknown"])
+    df_ref.to_csv(placeholder_paths["fp_ref"])
+
+    # fp_pos_markers / fp_neg_markers: one row "Unknown", gene columns all 0
+    marker_data = {g: [0.0] for g in gene_names}
+    df_markers = pd.DataFrame(marker_data, index=["Unknown"])
+    df_markers.to_csv(placeholder_paths["fp_pos_markers"])
+    df_markers.to_csv(placeholder_paths["fp_neg_markers"])
+
+    print(f"  Written dummy reference CSVs to {Path(placeholder_paths['fp_ref']).parent}")
 
 
 def make_dummy_preannotation(model) -> None:
@@ -69,9 +113,6 @@ def make_dummy_preannotation(model) -> None:
     cell-gene matrix to get cell IDs, then writes the h5 file that
     the training step expects.
     """
-    import glob
-    import numpy as np
-    import pandas as pd
     import h5py
 
     config = model.config
@@ -102,7 +143,9 @@ def make_dummy_preannotation(model) -> None:
 
 
 def run_bidcell(config_path: str) -> None:
-    config_to_use, has_reference = _patch_config_for_no_reference(config_path)
+    config_to_use, has_reference, placeholder_paths = _patch_config_for_no_reference(
+        config_path
+    )
 
     try:
         from bidcell import BIDCellModel
@@ -117,6 +160,10 @@ def run_bidcell(config_path: str) -> None:
             print("\n### Preprocessing ###")
             model.segment_nuclei()
             model.generate_expression_maps()
+
+            # Populate dummy reference CSVs now that all_gene_names.txt exists
+            _write_dummy_reference_csvs(placeholder_paths, model.config.files.data_dir)
+
             model.generate_patches()
             model.make_cell_gene_mat(is_cell=False)
 
