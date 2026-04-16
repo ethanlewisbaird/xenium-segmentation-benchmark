@@ -34,7 +34,7 @@ def make_baysor_csv(parquet_path: Path, output_csv: Path, min_tx: int = 5) -> No
     print("Building transcript assignment CSV...")
     df["cell"] = df["segger_cell_id"].map(cell_map).fillna("")
     df["is_noise"] = (~assigned_mask | ~df["segger_cell_id"].isin(keep_cells)).astype(int)
-    df["transcript_id"] = df["transcript_id"].astype(np.int64)
+    df["transcript_id"] = pd.to_numeric(df["transcript_id"], errors="coerce").astype(np.int64)
 
     out = df[["transcript_id", "cell", "is_noise"]]
     out.to_csv(output_csv, index=False)
