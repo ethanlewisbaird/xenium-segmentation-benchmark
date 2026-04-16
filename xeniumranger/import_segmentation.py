@@ -69,6 +69,9 @@ def run_import(args) -> None:
             "--viz-polygons",          str(args.viz_polygons),
         ]
 
+    if args.nopreflight:
+        cmd += ["--nopreflight", "1"]
+
     print("Running:", " ".join(cmd))
     result = subprocess.run(cmd)
     sys.exit(result.returncode)
@@ -91,6 +94,8 @@ def main() -> None:
                         help="Memory in GB (default: 48)")
     parser.add_argument("--xeniumranger", default=None,
                         help="Path to xeniumranger binary (default: from PATH)")
+    parser.add_argument("--nopreflight", action="store_true",
+                        help="Skip xeniumranger preflight checks (e.g. OME-TIFF UUID validation)")
 
     # BIDCell-specific
     parser.add_argument("--cells", type=Path, default=None,
