@@ -1,14 +1,17 @@
 """
 Convert Segger transcript parquet → Xenium-compatible cell_boundaries.parquet.
 
-Reads segger_transcripts.parquet, computes per-cell convex hull boundaries,
-and writes cell_boundaries.parquet + cells.parquet + transcripts.parquet to
-the output directory.  Coordinates are shifted from subset space to original
-Xenium space using offsets from subset_offsets.json.
+Reads the Segger output parquet (transcript_id + segger_cell_id assignments),
+merges with the original Xenium transcripts parquet to get coordinates, computes
+per-cell convex hull boundaries, and writes cell_boundaries.parquet +
+cells.parquet + transcripts.parquet to the output directory.  Coordinates are
+shifted from subset space to original Xenium space using offsets from
+subset_offsets.json.
 
 Usage:
   python methods/segger/to_xenium.py \
-      --segger-parquet  segger_output/.../segger_transcripts.parquet \
+      --segger-parquet  segger_output/.../transcripts_df.parquet \
+      --transcripts     outs_subset/transcripts.parquet \
       --offsets         outs_subset/subset_offsets.json \
       --output-dir      outs_subset/segger_segmentation \
       [--min-tx 5] [--max-verts 300]
@@ -30,6 +33,7 @@ def segger_to_xenium(
     parquet_path: Path,
     offsets_path: Path,
     output_dir: Path,
+    transcripts_path: Path | None = None,
     min_tx: int = 5,
     max_verts: int = 300,
 ) -> None:
@@ -41,11 +45,28 @@ def segger_to_xenium(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading segger transcripts...")
-    df = pd.read_parquet(
-        parquet_path,
-        columns=["transcript_id", "x_location", "y_location",
-                 "feature_name", "segger_cell_id", "bound"],
-    )
+    seg_cols = ["transcript_id", "segger_cell_id", "bound"]
+    coord_cols = ["transcript_id", "x_location", "y_location", "feature_name"]
+
+    # Try reading coordinates directly from the segger parquet first
+    try:
+        df = pd.read_parquet(
+            parquet_path,
+            columns=["transcript_id", "x_location", "y_location",
+                     "feature_name", "segger_cell_id", "bound"],
+        )
+    except Exception:
+        # Segger output doesn't include coordinates — merge with source transcripts
+        if transcripts_path is None:
+            raise ValueError(
+                "Segger parquet has no coordinate columns. "
+                "Pass --transcripts to merge with the original transcripts parquet."
+            )
+        print("  Segger parquet lacks coordinates — merging with source transcripts...")
+        df_seg = pd.read_parquet(parquet_path, columns=seg_cols)
+        df_tx = pd.read_parquet(transcripts_path, columns=coord_cols)
+        df = df_seg.merge(df_tx, on="transcript_id", how="left")
+        print(f"  Merged: {len(df):,} rows")
 
     df = df[df["segger_cell_id"] != "UNASSIGNED"].copy()
     print(f"  Assigned transcripts: {len(df):,}")
@@ -120,27 +141,12 @@ def segger_to_xenium(
 
     # Write transcripts.parquet with segger_cell_id as cell_id
     print("Writing transcripts.parquet...")
-    pf = pq.ParquetFile(parquet_path)
-    src_schema = pf.schema_arrow
-    fields = [
-        pa.field("cell_id", pa.string()) if f.name == "cell_id" else f
-        for f in src_schema
-    ]
-    new_schema = pa.schema(fields)
-
+    df["cell_id"] = df["segger_cell_id"].where(
+        df["segger_cell_id"] != "UNASSIGNED", ""
+    )
+    total_assigned = int((df["cell_id"] != "").sum())
     out_tx = output_dir / "transcripts.parquet"
-    writer = pq.ParquetWriter(out_tx, new_schema)
-    total_assigned = 0
-    for batch in pf.iter_batches(batch_size=500_000):
-        bdf = batch.to_pandas()
-        bdf["cell_id"] = bdf["segger_cell_id"].where(
-            bdf["segger_cell_id"] != "UNASSIGNED", ""
-        )
-        total_assigned += int((bdf["cell_id"] != "").sum())
-        writer.write_table(
-            pa.Table.from_pandas(bdf, schema=new_schema, preserve_index=False)
-        )
-    writer.close()
+    df.to_parquet(out_tx, index=False)
     print(f"  {total_assigned:,} transcripts assigned to cells")
     print(f"Wrote {out_tx}")
     print(f"\nDone! Files in: {output_dir}")
@@ -150,7 +156,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1].strip())
     parser.add_argument(
         "--segger-parquet", required=True,
-        help="Path to segger_transcripts.parquet",
+        help="Path to Segger output transcripts parquet (transcripts_df.parquet)",
+    )
+    parser.add_argument(
+        "--transcripts", default=None,
+        help="Path to original Xenium transcripts.parquet (needed when Segger "
+             "output lacks coordinate columns)",
     )
     parser.add_argument(
         "--offsets", required=True,
@@ -173,6 +184,7 @@ def main() -> None:
         Path(args.segger_parquet),
         Path(args.offsets),
         Path(args.output_dir),
+        Path(args.transcripts) if args.transcripts else None,
         args.min_tx,
         args.max_verts,
     )
