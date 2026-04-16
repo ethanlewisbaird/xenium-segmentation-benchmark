@@ -65,6 +65,9 @@ def segger_to_xenium(
         print("  Segger parquet lacks coordinates — merging with source transcripts...")
         df_seg = pd.read_parquet(parquet_path, columns=seg_cols)
         df_tx = pd.read_parquet(transcripts_path, columns=coord_cols)
+        # Align transcript_id types (Segger outputs string, Xenium uses uint64)
+        df_seg["transcript_id"] = df_seg["transcript_id"].astype(str)
+        df_tx["transcript_id"] = df_tx["transcript_id"].astype(str)
         df = df_seg.merge(df_tx, on="transcript_id", how="left")
         print(f"  Merged: {len(df):,} rows")
 
