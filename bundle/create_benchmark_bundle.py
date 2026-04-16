@@ -174,39 +174,31 @@ def add_method(method: str, src_dir: Path, bundle_dir: Path, is_first: bool = Fa
     print(f"  Done: {method}")
 
 
-def build_from_scratch():
-    """Build the benchmark bundle from bidcell and segger outputs."""
-    base = Path("/data-hdd0/Ethan_Baird/Dec25_xenium")
-
-    methods = [
-        ("bidcell", base / "experiment_bidcell" / "outs"),
-        ("segger",  base / "experiment_segger"  / "outs"),
-    ]
-
+def build_from_scratch(methods: list[tuple[str, Path]], bundle_dir: Path):
+    """Build the benchmark bundle from the given method outs directories."""
     for i, (method, src_dir) in enumerate(methods):
         if not src_dir.exists():
             print(f"WARNING: {src_dir} not found, skipping {method}")
             continue
-        add_method(method, src_dir, BUNDLE, is_first=(i == 0))
+        add_method(method, src_dir, bundle_dir, is_first=(i == 0))
 
-    print(f"\n=== Bundle created at: {BUNDLE.resolve()} ===")
-    print_summary()
+    print(f"\n=== Bundle created at: {bundle_dir.resolve()} ===")
+    print_summary(bundle_dir)
 
 
-def print_summary():
-    if not BUNDLE.exists():
+def print_summary(bundle_dir: Path):
+    if not bundle_dir.exists():
         return
     total = 0
-    for f in BUNDLE.rglob("*"):
+    for f in bundle_dir.rglob("*"):
         if f.is_file():
             total += f.stat().st_size
     print(f"Total (logical): {total/1e9:.1f} GB")
-    # Count actual disk usage (hardlinks only counted once at OS level)
-    result = os.popen(f"du -sh {BUNDLE} 2>/dev/null").read().split()[0]
+    result = os.popen(f"du -sh {bundle_dir} 2>/dev/null").read().split()[0]
     print(f"Disk usage (actual): {result}")
     print()
     print("Contents:")
-    for p in sorted(BUNDLE.iterdir()):
+    for p in sorted(bundle_dir.iterdir()):
         if p.is_file():
             print(f"  {p.name}  ({p.stat().st_size/1e6:.0f} MB)")
         else:
@@ -214,19 +206,39 @@ def print_summary():
             print(f"  {p.name}/  ({size/1e6:.0f} MB)")
     print()
     print("To open in Xenium Explorer, open any of:")
-    for xf in sorted(BUNDLE.glob("experiment_*.xenium")):
+    for xf in sorted(bundle_dir.glob("experiment_*.xenium")):
         print(f"  {xf}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    parser.add_argument("--output-dir", type=Path, default=BUNDLE,
+                        help=f"Bundle output directory (default: {BUNDLE})")
     parser.add_argument("--add", nargs=2, metavar=("METHOD", "OUTS_DIR"),
                         help="Add a new method to an existing bundle")
+    parser.add_argument("--methods", nargs="+", metavar="METHOD=OUTS_DIR",
+                        help="Methods to bundle, e.g. bidcell=experiment_bidcell/outs "
+                             "segger=experiment_segger/outs")
     args = parser.parse_args()
+
+    bundle_dir = args.output_dir
 
     if args.add:
         method, outs_dir = args.add
-        add_method(method, Path(outs_dir), BUNDLE, is_first=not BUNDLE.exists())
-        print_summary()
+        add_method(method, Path(outs_dir), bundle_dir, is_first=not bundle_dir.exists())
+        print_summary(bundle_dir)
+    elif args.methods:
+        method_list = []
+        for item in args.methods:
+            name, path = item.split("=", 1)
+            method_list.append((name, Path(path)))
+        build_from_scratch(method_list, bundle_dir)
     else:
-        build_from_scratch()
+        # Default: look for experiment_bidcell/outs and experiment_segger/outs
+        # relative to the current working directory
+        cwd = Path.cwd()
+        default_methods = [
+            ("bidcell", cwd / "experiment_bidcell" / "outs"),
+            ("segger",  cwd / "experiment_segger"  / "outs"),
+        ]
+        build_from_scratch(default_methods, bundle_dir)
