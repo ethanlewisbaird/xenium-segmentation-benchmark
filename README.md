@@ -10,8 +10,8 @@ Wraps multiple segmentation methods (currently Segger and BIDCell), converts the
 outs_subset/                    ← subset directory (from xenium-subsetter)
 outs_subset_bundle/             ← xeniumranger-compatible bundle (from xenium-subsetter)
       │
-      ├── methods/segger/        create_dataset.py → train.py → run_predict.py → to_xenium.py
-      ├── methods/bidcell/       run_bidcell.py → to_xenium.py
+      ├── methods/segger/run_pipeline.py   (or individual: create_dataset → train → run_predict → to_xenium)
+      ├── methods/bidcell/run_pipeline.py  (or individual: run_bidcell → to_xenium)
       │
       ▼
 segmentation outputs (per-method cell boundaries + transcript assignments)
@@ -97,76 +97,128 @@ python -m xenium_subsetter.build_bundle \
 
 ### 1. Run Segger
 
+The pipeline runner handles all steps (create_dataset → train → predict → to_xenium → converters) and writes outputs to a structured directory with per-step log files:
+
 ```bash
-# Step 1 — Build graph tiles from transcripts + boundaries
+conda run -n segger311 python methods/segger/run_pipeline.py \
+    --xenium-dir /path/to/outs_subset \
+    --output-dir /path/to/segger_output \
+    [--epochs 100] [--batch-size 1] [--devices 1]
+```
+
+Output structure:
+```
+segger_output/
+├── tiles/                     graph tiles
+├── model/                     Lightning checkpoints
+├── predict/                   Segger output parquet
+├── segmentation/              cell_boundaries.parquet, cells.parquet
+├── transcript_assignment.csv
+├── viz_polygons.geojson
+└── logs/
+    ├── 01_create_dataset.log
+    ├── 02_train.log
+    ├── 03_run_predict.log
+    ├── 04_to_xenium.log
+    ├── 05a_make_baysor_format.log
+    └── 05b_make_viz_polygons.log
+```
+
+<details>
+<summary>Run individual steps manually</summary>
+
+```bash
+# Step 1 — Build graph tiles
 conda run -n segger311 python methods/segger/create_dataset.py \
     --xenium-dir /path/to/outs_subset \
-    --output-dir /path/to/segger_tiles
+    --output-dir /path/to/segger_output/tiles
 
 # Step 2 — Train the GNN
 conda run -n segger311 python methods/segger/train.py \
-    --tiles-dir  /path/to/segger_tiles \
-    --output-dir /path/to/segger_model \
+    --tiles-dir  /path/to/segger_output/tiles \
+    --output-dir /path/to/segger_output/model \
     --epochs 100 --devices 1
 
 # Step 3 — Run inference
 conda run -n segger311 python methods/segger/run_predict.py \
-    --dataset-dir /path/to/segger_tiles \
-    --output-dir  /path/to/segger_output \
-    --checkpoint  /path/to/segger_model/lightning_logs/version_0 \
+    --dataset-dir /path/to/segger_output/tiles \
+    --output-dir  /path/to/segger_output/predict \
+    --checkpoint  /path/to/segger_output/model/lightning_logs/version_0 \
     --transcripts /path/to/outs_subset/transcripts.parquet
 
 # Step 4 — Convert to original Xenium coordinates
 conda run -n segger311 python methods/segger/to_xenium.py \
-    --segger-parquet /path/to/segger_output/.../transcripts_df.parquet \
+    --segger-parquet /path/to/segger_output/predict/.../transcripts_df.parquet \
     --transcripts    /path/to/outs_subset/transcripts.parquet \
     --offsets        /path/to/outs_subset/subset_offsets.json \
-    --output-dir     /path/to/segger_xenium
+    --output-dir     /path/to/segger_output/segmentation
 
 # Step 5 — Convert to xeniumranger formats
 conda run -n segger311 python converters/make_baysor_format.py \
-    --segger-parquet /path/to/segger_output/.../transcripts_df.parquet \
-    --output-csv     /path/to/segger_transcript_assignment.csv
+    --segger-parquet /path/to/segger_output/predict/.../transcripts_df.parquet \
+    --output-csv     /path/to/segger_output/transcript_assignment.csv
 
 conda run -n segger311 python converters/make_viz_polygons.py \
-    --boundaries     /path/to/segger_xenium/cell_boundaries.parquet \
-    --segger-parquet /path/to/segger_output/.../transcripts_df.parquet \
-    --output         /path/to/segger_viz_polygons.geojson
+    --boundaries     /path/to/segger_output/segmentation/cell_boundaries.parquet \
+    --segger-parquet /path/to/segger_output/predict/.../transcripts_df.parquet \
+    --output         /path/to/segger_output/viz_polygons.geojson
 ```
+</details>
 
 ### 2. Run BIDCell
 
-Copy the config template and fill in your paths:
+The pipeline runner auto-generates a config, runs BIDCell (preprocess → train → predict), converts the mask, and builds the GeoJSON:
 
 ```bash
-cp methods/bidcell/config_template.yaml my_bidcell_config.yaml
-# Edit my_bidcell_config.yaml:
-#   files.data_dir    → /path/to/outs_subset
-#   files.fp_dapi     → /path/to/outs_subset/morphology_focus/ch0000_dapi.ome.tif
-#   files.fp_transcripts → /path/to/outs_subset/transcripts.csv.gz
+conda run -n bidcell python methods/bidcell/run_pipeline.py \
+    --xenium-dir /path/to/outs_subset \
+    --output-dir /path/to/bidcell_output \
+    [--cpus 4] [--total-steps 4000] [--total-epochs 1]
+
+# With reference cell types (optional):
+#   --fp-ref /path/to/reference.csv
+#   --fp-pos-markers /path/to/pos_markers.csv
+#   --fp-neg-markers /path/to/neg_markers.csv
 ```
 
-Run the full pipeline (preprocess → train → predict):
+Output structure:
+```
+bidcell_output/
+├── config.yaml               auto-generated BIDCell config
+├── bidcell/                  BIDCell working dir (model_outputs/ inside)
+├── segmentation/             cell_boundaries.parquet, cells.parquet
+├── cells.geojson
+└── logs/
+    ├── 01_run_bidcell.log
+    ├── 02_to_xenium.log
+    └── 03_make_geojson.log
+```
+
+<details>
+<summary>Run individual steps manually</summary>
 
 ```bash
-# Runs nuclei segmentation, expression maps, patches, cell-gene matrix,
-# preannotation, training, and prediction in one command.
-# If fp_ref is not set, all nuclei are assigned type Unknown (no reference needed).
+# Copy and edit the config template
+cp methods/bidcell/config_template.yaml my_bidcell_config.yaml
+# Edit: files.data_dir, files.fp_dapi, files.fp_transcripts
+
+# Run BIDCell (preprocess → train → predict)
 conda run -n bidcell python methods/bidcell/run_bidcell.py \
     --config my_bidcell_config.yaml
 
 # Convert mask to original Xenium coordinates
 conda run -n bidcell python methods/bidcell/to_xenium.py \
-    --mask        /path/to/outs_subset/model_outputs/.../epoch_N_step_M.tif \
+    --mask        /path/to/model_outputs/.../epoch_N_step_M.tif \
     --transcripts /path/to/outs_subset/transcripts.parquet \
     --offsets     /path/to/outs_subset/subset_offsets.json \
-    --output-dir  /path/to/bidcell_xenium
+    --output-dir  /path/to/bidcell_output/segmentation
 
 # Convert to GeoJSON for xeniumranger
 conda run -n bidcell python converters/make_geojson.py \
-    --boundaries /path/to/bidcell_xenium/cell_boundaries.parquet \
-    --output     /path/to/bidcell_cells.geojson
+    --boundaries /path/to/bidcell_output/segmentation/cell_boundaries.parquet \
+    --output     /path/to/bidcell_output/cells.geojson
 ```
+</details>
 
 ### 3. Import into Xenium Explorer via xeniumranger
 
