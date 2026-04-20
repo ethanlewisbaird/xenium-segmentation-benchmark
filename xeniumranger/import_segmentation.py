@@ -2,13 +2,18 @@
 Run xeniumranger import-segmentation for a segmentation method.
 
 Wraps xeniumranger's import-segmentation command with method-specific
-argument handling.  Supports two import modes:
+argument handling.  Supports three import modes:
 
   bidcell (polygon-based):
     xeniumranger import-segmentation
         --id <id> --xenium-bundle <bundle> --cells <geojson> --units microns
 
   segger (transcript-assignment-based):
+    xeniumranger import-segmentation
+        --id <id> --xenium-bundle <bundle>
+        --transcript-assignment <csv> --viz-polygons <geojson> --units microns
+
+  proseg (transcript-assignment-based):
     xeniumranger import-segmentation
         --id <id> --xenium-bundle <bundle>
         --transcript-assignment <csv> --viz-polygons <geojson> --units microns
@@ -27,6 +32,14 @@ Usage:
       --xenium-bundle         outs_subset_bundle \\
       --transcript-assignment segger_transcript_assignment.csv \\
       --viz-polygons          segger_viz_polygons.geojson \\
+      [--localcores 8] [--localmem 48] [--xeniumranger /path/to/xeniumranger]
+
+  python xeniumranger/import_segmentation.py \\
+      proseg \\
+      --id                    experiment_proseg \\
+      --xenium-bundle         outs_subset_bundle \\
+      --transcript-assignment proseg_output/segmentation/transcript_assignment.csv \\
+      --viz-polygons          proseg_output/segmentation/viz_polygons.geojson \\
       [--localcores 8] [--localmem 48] [--xeniumranger /path/to/xeniumranger]
 """
 
@@ -63,7 +76,7 @@ def run_import(args) -> None:
 
     if args.method == "bidcell":
         cmd += ["--cells", str(args.cells)]
-    elif args.method == "segger":
+    elif args.method in ("segger", "proseg"):
         cmd += [
             "--transcript-assignment", str(args.transcript_assignment),
             "--viz-polygons",          str(args.viz_polygons),
@@ -82,7 +95,7 @@ def main() -> None:
         description=__doc__.split("\n")[1].strip(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("method", choices=["bidcell", "segger"],
+    parser.add_argument("method", choices=["bidcell", "segger", "proseg"],
                         help="Segmentation method")
     parser.add_argument("--id", required=True,
                         help="Output experiment ID (xeniumranger --id)")
@@ -101,20 +114,20 @@ def main() -> None:
     parser.add_argument("--cells", type=Path, default=None,
                         help="[bidcell] GeoJSON cell polygons")
 
-    # Segger-specific
+    # Segger / proseg
     parser.add_argument("--transcript-assignment", type=Path, default=None,
-                        help="[segger] Baysor-format transcript assignment CSV")
+                        help="[segger/proseg] Baysor-format transcript assignment CSV")
     parser.add_argument("--viz-polygons", type=Path, default=None,
-                        help="[segger] GeoJSON viz polygons")
+                        help="[segger/proseg] GeoJSON viz polygons")
 
     args = parser.parse_args()
 
     if args.method == "bidcell" and not args.cells:
         parser.error("--cells is required for bidcell")
-    if args.method == "segger" and not args.transcript_assignment:
-        parser.error("--transcript-assignment is required for segger")
-    if args.method == "segger" and not args.viz_polygons:
-        parser.error("--viz-polygons is required for segger")
+    if args.method in ("segger", "proseg") and not args.transcript_assignment:
+        parser.error(f"--transcript-assignment is required for {args.method}")
+    if args.method in ("segger", "proseg") and not args.viz_polygons:
+        parser.error(f"--viz-polygons is required for {args.method}")
 
     run_import(args)
 
